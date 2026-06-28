@@ -68,34 +68,33 @@ act_inventory() {
 
 act_setup() {
     need_root
-    [ -n "$IQV_DIR" ] || die "set IQV_DIR to the extracted iqvlinux source root"
-    local ldh="$IQV_DIR/inc/linux/linuxdefs.h"
-    local mk="$IQV_DIR/src/linux/driver"
-    [ -f "$mk/Makefile" ] || die "no Makefile under $mk"
-    if [ -f "$ldh" ] && ! grep -q 'KERNEL_VERSION(6,8,0)' "$ldh"; then
-        log "patching linuxdefs.h (kernel >= 6.8 removed iommu_present)"
-        sed -i '/#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,2,0)/ s/$/ \&\& LINUX_VERSION_CODE < KERNEL_VERSION(6,8,0)/' "$ldh"
+    # bootutil reaches the card in "driverless" mode via /dev/mem. The bundled
+    # QV kernel driver (iqvlinux) does NOT work on modern kernels (>=6.8) -- it
+    # builds and registers /dev/nal but its ioctl handshake fails -- so we rely
+    # on driverless, which only needs strict-MMIO relaxed (and Secure Boot off,
+    # since lockdown blocks /dev/mem).
+    if grep -qw 'iomem=relaxed' /proc/cmdline; then
+        log "iomem=relaxed active -- bootutil driverless is ready"
+        return 0
     fi
-    log "building iqvlinux"
-    make -C "$mk" NALDIR="$IQV_DIR" >/dev/null
-    [ -f "$mk/iqvlinux.ko" ] || die "build failed: no iqvlinux.ko"
-    lsmod | grep -q '^iqvlinux' || insmod "$mk/iqvlinux.ko"
-    lsmod | grep -q '^iqvlinux' || die "insmod failed"
-    log "iqvlinux loaded"
-    warn "if bootutil later says 'inaccessible device memory', add kernel param"
-    warn "iomem=relaxed (and reboot) so the QV driver can map device memory."
+    warn "iomem=relaxed not in kernel cmdline (bootutil needs it for /dev/mem)"
+    local dropin=/etc/default/grub.d/99-iomem-relaxed.cfg
+    [ -f "$dropin" ] || printf '%s\n' 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT iomem=relaxed"' > "$dropin"
+    log "wrote $dropin"
+    if command -v update-grub >/dev/null; then update-grub; else grub-mkconfig -o /boot/grub/grub.cfg; fi
+    warn "REBOOT to apply iomem=relaxed, then continue."
 }
 
 act_backup() {
-    need_root; need_cmd stat
+    need_root; need_cmd ethtool
     local mac; mac=$(mac_norm "$1"); load_profile "$2"
-    [ -n "$BOOTUTIL_DIR" ] || die "set BOOTUTIL_DIR"
     mkdir -p "$WORK_DIR"
-    local nic; nic=$(bootutil_nic_for_mac "$BOOTUTIL_DIR" "$mac")
-    [ -n "$nic" ] || die "bootutil can't find NIC $mac — run '$SELF setup' first (QV driver/iomem)"
+    # Full NVM via the i40e kernel path (ethtool -e). bootutil -SAVEIMAGE only
+    # dumps the option-ROM (~387 KB), which would fail the flash-size gate.
+    local ifc; ifc=$(iface_for_mac "$mac") || die "no interface with MAC $mac (is i40e bound?)"
     local out; out="$WORK_DIR/${mac}_$(date +%Y%m%d-%H%M%S).nvm"
-    log "saving NVM image of NIC $nic ($mac) -> $out"
-    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -SAVEIMAGE -FILE="$out" )
+    log "full NVM backup of $ifc ($mac) via ethtool -e -> $out"
+    ethtool -e "$ifc" raw on > "$out" 2>/dev/null || die "ethtool -e read failed"
     local sz; sz=$(file_size "$out")
     log "backup size: $sz bytes (profile expects $EXPECTED_FLASH_BYTES)"
     [ "$sz" = "$EXPECTED_FLASH_BYTES" ] \
@@ -109,9 +108,9 @@ act_replace_orom() {
     local mac; mac=$(mac_norm "$1")
     [ -n "$BOOTUTIL_DIR" ] || die "set BOOTUTIL_DIR"
     local nic; nic=$(bootutil_nic_for_mac "$BOOTUTIL_DIR" "$mac")
-    [ -n "$nic" ] || die "bootutil can't find NIC $mac (run setup; QV/iomem?)"
+    [ -n "$nic" ] || die "bootutil can't find NIC $mac (run setup; iomem=relaxed?)"
     confirm "Replace option-ROM on NIC $nic ($mac) via bootutil -up=combo?" || die "aborted"
-    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -up=combo )
+    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -up=combo -QUIET )
 }
 
 act_flash() {
@@ -140,7 +139,7 @@ act_flash() {
     confirm "Proceed with crossflash of $mac?" || die "aborted by user"
 
     log "step 1/3: replace OEM option-ROM"
-    ASSUME_YES=1 act_replace_orom "$mac"
+    act_replace_orom "$mac"
 
     log "step 2/3: inject etrack $et into cfg REPLACES"
     [ -f "$cfg.orig" ] || cp "$cfg" "$cfg.orig"
