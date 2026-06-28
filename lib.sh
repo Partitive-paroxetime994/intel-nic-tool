@@ -73,12 +73,14 @@ sibling_macs() {
         [ "$a" = "$want" ] || continue
         slot=$(basename "$(readlink -f "$n/device")"); base=${slot%.*}; break
     done
-    [ -n "$base" ] || { mac_norm "$1"; return; }
+    # one MAC per line -- mac_norm itself prints no trailing newline, so emit it
+    # here or the ports concatenate into a single bogus token.
+    [ -n "$base" ] || { printf '%s\n' "$(mac_norm "$1")"; return; }
     for n in /sys/class/net/*; do
         [ -e "$n/device" ] || continue
         slot=$(basename "$(readlink -f "$n/device")")
         [ "${slot%.*}" = "$base" ] || continue
-        mac_norm "$(cat "$n/address")"
+        printf '%s\n' "$(mac_norm "$(cat "$n/address")")"
     done
 }
 
