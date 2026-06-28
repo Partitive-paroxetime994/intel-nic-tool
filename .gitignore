@@ -1,0 +1,6 @@
+# runtime artifacts — backups, logs, and result XML
+crossflash-work/
+*.nvm
+*.log
+*.xml
+.DS_Store
