@@ -1,6 +1,6 @@
-# intel-nic-crossflash
+# intel-nic-tool
 
-Safely crossflash OEM-branded Intel NICs (Dell / Lenovo / HP) to **generic Intel
+Safely crossflash or update OEM-branded Intel NICs (Dell / Lenovo / HP) to **generic Intel
 firmware**, so they stop being feature-locked and stop hanging UEFI-only boards
 whose option-ROM can't be disabled on the OEM firmware.
 
