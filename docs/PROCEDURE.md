@@ -37,17 +37,23 @@ Intel firmware removes the lock.
    makes this a hard gate: it won't flash unless a backup of the matching size
    exists.
 
-3. **Load the QV driver.** `bootutil` talks to the card through Intel's
-   `iqvlinux` kernel module. On kernel >= 6.8, `iommu_present()` was removed, so
-   `inc/linux/linuxdefs.h` must gate `NAL_IOMMU_API_PRESENT` with
-   `&& LINUX_VERSION_CODE < KERNEL_VERSION(6,8,0)`. If bootutil reports
-   *"inaccessible device memory"*, boot with `iomem=relaxed` so the QV driver can
-   map device memory.
+3. **Give bootutil device access (driverless).** `bootutil` normally reaches the
+   card through Intel's `iqvlinux` QV kernel module, but that module is dead on
+   modern kernels (~6.8 and up, incl. 7.x): it builds and registers `/dev/nal`
+   yet its ioctl handshake fails. Use bootutil's **driverless** path instead,
+   which maps device memory via `/dev/mem`. That needs `iomem=relaxed` on the
+   kernel cmdline (relaxes strict MMIO) and Secure Boot **off** (lockdown blocks
+   `/dev/mem`); the base `i40e` driver must stay **bound** (unbinding hides the
+   card from bootutil). bootutil prints a `Connection to QV driver failed` notice
+   in this mode — that's expected, and the operation still succeeds.
 
-4. **Replace the OEM option-ROM first** — `bootutil64e -NIC=N -up=combo`. The
-   community is consistent that nvmupdate "refuses to deal with" the Dell OROM,
-   so it's swapped for Intel's combined image (`BootIMG.FLB`) first. Say **Yes**
-   to the "create restore image" prompt.
+4. **Replace the OEM option-ROM first** — `bootutil64e -NIC=N -up=combo
+   -FILE=/path/to/BootIMG.FLB`. The community is consistent that nvmupdate
+   "refuses to deal with" the Dell OROM, so it's swapped for Intel's combined
+   image (`BootIMG.FLB`) first. Pass `-FILE` explicitly — without it bootutil
+   looks for `BootIMG.FLB` in the CWD and dies *"Failed to open BootIMG.FLB"*;
+   use the copy bundled with the BootUtil package (matched to that bootutil
+   version). With `-QUIET` it skips the "create restore image" prompt.
 
 5. **Inject the etrack into `nvmupdate.cfg`.** nvmupdate decides candidacy by
    matching `REPLACES` etrack + VENDOR + DEVICE. Append the card's etrack to the
@@ -55,15 +61,27 @@ Intel firmware removes the lock.
    shipped cfg in place (a hand-written cfg is often rejected; the modified
    original works). Note the cfg uses **CRLF** line endings — keep them.
 
-6. **Flash the NVM** — `nvmupdate64e -u -m <MAC> -rd -b -s`. `-rd` resets Dell
-   user settings to default (needed for OEM cards), `-b` keeps a backup, `-m`
-   restricts to one card, `-s` is silent. **Do not interrupt or power off.**
+6. **Flash the NVM, then reset OEM settings.** Crossflash the one card:
+   `nvmupdate64e -u -m <MAC> -b -s` (`-b` keeps a backup, `-m` one card, `-s`
+   silent). Then reset its OEM user settings to Intel defaults:
+   `nvmupdate64e -u -rd -f -m <MAC> -s`. **The `-rd` reset is not optional on OEM
+   cards** — skip it and `bootutil -FD` in step 8 returns *"Unsupported
+   feature"* (this was the exact wall hit in testing: a real generic crossflash
+   still refused `-FD` until `-rd` ran). `-rd` alone is interactive, so it's
+   paired with `-u`; `-f` skips the now-redundant image compare. **Do not
+   interrupt or power off during either run.**
 
-7. **Cold power-cycle.** Full A/C off — a warm reboot will not load the new NVM.
+7. **Reboot.** A reboot reloads the new NVM — Intel's tool reports
+   `PowerCycleRequired=0`, and a warm reboot was sufficient in testing. If
+   `ethtool -i` still shows the old version afterward, do a full cold A/C cycle;
+   the reboot writes nothing, so a no-op reboot can't hurt.
 
-8. **Verify, then disable the option-ROM** — `ethtool -i` should show 9.x; then
-   `bootutil64e -NIC=N -FD` now succeeds (no longer OEM-locked), which is what
-   stops the UEFI-only board from hanging.
+8. **Verify, then disable the option-ROM on every port** — `ethtool -i` should
+   show 9.x. Then run `bootutil64e -NIC=N -FD` for **each port of the card**: a
+   dual-port card shares one flash chip, but the BIOS dispatches every port that
+   still advertises a boot ROM, so both must end up `FLASH Disabled` or the host
+   still hangs. This now succeeds because step 6's `-rd` cleared the OEM lock,
+   and it's what stops the UEFI-only board from hanging.
 
 Do **one card at a time**, proving each end-to-end before the next.
 

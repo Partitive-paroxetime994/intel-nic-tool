@@ -14,7 +14,6 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 # --- tool locations (override via env) --------------------------------------
 : "${NVM_DIR:=}"        # dir with nvmupdate64e + nvmupdate.cfg
 : "${BOOTUTIL_DIR:=}"   # dir with bootutil64e
-: "${IQV_DIR:=}"        # extracted iqvlinux source root (inc/ + src/)
 : "${WORK_DIR:=$PWD/crossflash-work}"   # backups + logs land here
 ASSUME_YES=0
 
@@ -38,7 +37,7 @@ Writes firmware (each gated by confirmation):
 
 Options:  -y  assume yes (still runs preflight gates)   -h  help
 
-Env:  NVM_DIR  BOOTUTIL_DIR  IQV_DIR  WORK_DIR
+Env:  NVM_DIR  BOOTUTIL_DIR  WORK_DIR
 Profiles: profiles/<name>.conf   MAC may be given with or without separators.
 EOF
 }
@@ -107,10 +106,16 @@ act_replace_orom() {
     need_root
     local mac; mac=$(mac_norm "$1")
     [ -n "$BOOTUTIL_DIR" ] || die "set BOOTUTIL_DIR"
+    # bootutil -up=combo needs its combo OROM (BootIMG.FLB) and otherwise looks
+    # only in the CWD, so pass it explicitly. Use the copy bundled WITH BootUtil
+    # (matched to this bootutil version); nvmupdate later flashes the
+    # version-matched 9.56 OROM over it.
+    local orom; orom="$(dirname "$BOOTUTIL_DIR")/${OROM_IMAGE:-BootIMG.FLB}"
+    [ -f "$orom" ] || die "OROM image not found: $orom"
     local nic; nic=$(bootutil_nic_for_mac "$BOOTUTIL_DIR" "$mac")
     [ -n "$nic" ] || die "bootutil can't find NIC $mac (run setup; iomem=relaxed?)"
-    confirm "Replace option-ROM on NIC $nic ($mac) via bootutil -up=combo?" || die "aborted"
-    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -up=combo -QUIET )
+    confirm "Replace option-ROM on NIC $nic ($mac) via bootutil -up=combo ($orom)?" || die "aborted"
+    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -up=combo -FILE="$orom" -QUIET )
 }
 
 act_flash() {
@@ -146,28 +151,44 @@ act_flash() {
     append_etrack_to_cfg "$cfg" "$NVM_IMAGE" "$et" > "$cfg.new" && mv "$cfg.new" "$cfg"
     grep -q "$et" "$cfg" || die "etrack injection failed"
 
-    log "step 3/3: nvmupdate (minutes; DO NOT interrupt or power off)"
+    log "step 3/4: nvmupdate crossflash (minutes; DO NOT interrupt or power off)"
     mkdir -p "$WORK_DIR"
     # Core crossflash: update this one card's NVM from the cfg-matched image,
-    # keeping a rollback backup. NOTE: -rd (reset Dell settings to default) is
-    # intentionally NOT combined here; run it separately afterward only if the
-    # card still shows OEM artifacts.
+    # keeping a rollback backup.
     ( cd "$NVM_DIR" && ./nvmupdate64e -u -m "$mac" -b -s \
         -l "$WORK_DIR/nvmupdate_$mac.log" -o "$WORK_DIR/nvmupdate_$mac.xml" )
+
+    log "step 4/4: reset OEM user settings to Intel defaults (-rd)"
+    # REQUIRED for OEM (Dell/Lenovo/HP) cards: without this reset the card keeps
+    # its OEM config and 'disable-orom' (bootutil -FD) later returns "Unsupported
+    # feature". -rd on its own is interactive, so pair it with -u; -f skips the
+    # image compare since the NVM is already at the target after step 3.
+    ( cd "$NVM_DIR" && ./nvmupdate64e -u -rd -f -m "$mac" -s \
+        -l "$WORK_DIR/nvmreset_$mac.log" -o "$WORK_DIR/nvmreset_$mac.xml" )
     hr
-    log "nvmupdate finished — see $WORK_DIR/nvmupdate_$mac.xml"
-    warn "COLD POWER-CYCLE (full A/C off) required before the new NVM loads."
-    warn "After power-cycle: '$SELF verify $mac $2' then '$SELF disable-orom $mac'."
+    log "crossflash + reset finished — see $WORK_DIR/nvmupdate_$mac.xml"
+    warn "REBOOT (or cold power-cycle) required before the new NVM + reset load."
+    warn "After reboot: '$SELF verify $mac $2' then '$SELF disable-orom $mac'."
 }
 
 act_disable_orom() {
     need_root
     local mac; mac=$(mac_norm "$1")
     [ -n "$BOOTUTIL_DIR" ] || die "set BOOTUTIL_DIR"
-    local nic; nic=$(bootutil_nic_for_mac "$BOOTUTIL_DIR" "$mac")
-    [ -n "$nic" ] || die "bootutil can't find NIC $mac"
-    confirm "Disable option-ROM (flash) on NIC $nic ($mac)?" || die "aborted"
-    ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -FD )
+    # Disable the boot-ROM on EVERY port of the physical card. bootutil tracks
+    # the enable state per port and the BIOS dispatches any port still
+    # advertising one, so a dual-port card must have BOTH ports disabled or it
+    # still hangs the host at POST. (-FD requires the step-4 -rd reset to have
+    # run first, or it returns "Unsupported feature" on OEM cards.)
+    local macs; macs=$(sibling_macs "$mac"); [ -n "$macs" ] || macs="$mac"
+    local m nic done_any=0
+    for m in $macs; do
+        nic=$(bootutil_nic_for_mac "$BOOTUTIL_DIR" "$m")
+        [ -n "$nic" ] || { warn "bootutil can't find NIC $m — skipping"; continue; }
+        confirm "Disable option-ROM (flash) on NIC $nic ($m)?" || { warn "skipped $m"; continue; }
+        ( cd "$BOOTUTIL_DIR" && ./bootutil64e -NIC="$nic" -FD ) && done_any=1
+    done
+    [ "$done_any" = 1 ] || die "no ports disabled for $mac"
 }
 
 act_restore() {

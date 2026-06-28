@@ -59,6 +59,29 @@ iface_for_mac() {
     return 1
 }
 
+# All Intel iface MACs on the same physical card as the given MAC -- i.e. every
+# port sharing the same PCI domain:bus:device (any function). A dual-port NIC
+# has one flash chip but bootutil tracks the boot-ROM enable state per port, and
+# the BIOS dispatches every port that still advertises one, so disable-orom must
+# hit them all. Falls back to just the input MAC if the slot can't be resolved.
+sibling_macs() {
+    local want base="" n slot a
+    want=$(mac_norm "$1" | tr 'A-F' 'a-f')
+    for n in /sys/class/net/*; do
+        [ -e "$n/address" ] || continue
+        a=$(tr -d ':' < "$n/address" | tr 'A-F' 'a-f')
+        [ "$a" = "$want" ] || continue
+        slot=$(basename "$(readlink -f "$n/device")"); base=${slot%.*}; break
+    done
+    [ -n "$base" ] || { mac_norm "$1"; return; }
+    for n in /sys/class/net/*; do
+        [ -e "$n/device" ] || continue
+        slot=$(basename "$(readlink -f "$n/device")")
+        [ "${slot%.*}" = "$base" ] || continue
+        mac_norm "$(cat "$n/address")"
+    done
+}
+
 # bootutil NIC index for a MAC. $1=bootutil dir, $2=MAC (any format).
 # bootutil columns: Port  NetworkAddress  Location ...  (MAC has no separators)
 bootutil_nic_for_mac() {

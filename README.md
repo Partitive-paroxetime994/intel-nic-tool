@@ -27,12 +27,13 @@ code (see [Adding a card](#adding-a-card)).
 
 ## Requirements
 
-- Linux, root, `ethtool`, `lspci`, kernel headers + `build-essential`
+- Linux, root, `ethtool`, `lspci`
 - Intel **NVM Update Package** for the card family (provides `nvmupdate64e`,
   `nvmupdate.cfg`, and the target `*.bin` images)
-- Intel **Preboot/BootUtil** package (provides `bootutil64e` and the `iqvlinux`
-  QV-driver source)
-- Secure Boot **off** (the `iqvlinux` module is unsigned)
+- Intel **Preboot/BootUtil** package (provides `bootutil64e`)
+- `iomem=relaxed` on the kernel cmdline and Secure Boot **off** — bootutil
+  reaches the card "driverless" via `/dev/mem` (its bundled `iqvlinux` QV driver
+  is non-functional on modern kernels). `setup` checks/sets `iomem=relaxed`.
 
 ## Usage
 
@@ -40,16 +41,15 @@ code (see [Adding a card](#adding-a-card)).
 # point at the unpacked Intel tools
 export NVM_DIR=/path/to/700Series/Linux_x64
 export BOOTUTIL_DIR=/path/to/Preboot/APPS/BootUtil/Linux_x64
-export IQV_DIR=$BOOTUTIL_DIR/DRIVER/iqvbuild
 export WORK_DIR=$HOME/crossflash-work        # backups + logs
 
 sudo -E ./crossflash.sh inventory                       # identify cards + etrack
-sudo -E ./crossflash.sh setup                           # build + load QV driver
+sudo -E ./crossflash.sh setup                           # ensure iomem=relaxed (driverless)
 sudo -E ./crossflash.sh backup  F8F21E01DDE0 x710-da2   # size-verified backup
-sudo -E ./crossflash.sh flash   F8F21E01DDE0 x710-da2   # crossflash (gated)
-#   --> cold power-cycle (full A/C off) <--
+sudo -E ./crossflash.sh flash   F8F21E01DDE0 x710-da2   # crossflash + -rd reset (gated)
+#   --> reboot (cold A/C cycle only if the version doesn't change) <--
 sudo -E ./crossflash.sh verify       F8F21E01DDE0 x710-da2
-sudo -E ./crossflash.sh disable-orom F8F21E01DDE0       # stop UEFI POST hang
+sudo -E ./crossflash.sh disable-orom F8F21E01DDE0       # -FD on every port -> stop POST hang
 
 # recovery, if needed
 sudo -E ./crossflash.sh restore F8F21E01DDE0 $WORK_DIR/F8F21E01DDE0_<ts>.nvm
