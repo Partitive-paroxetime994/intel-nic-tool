@@ -212,7 +212,7 @@ act_verify() {
     local mac; mac=$(mac_norm "$1"); load_profile "$2"
     local ifc; ifc=$(iface_for_mac "$mac") || die "no interface with MAC $mac"
     log "ethtool -i $ifc:"; ethtool -i "$ifc" | sed 's/^/    /'
-    log "etrack now: $(get_etrack "$ifc")  (was Dell 80002E8D before crossflash)"
+    log "etrack now: $(get_etrack "$ifc")  (generic Intel after crossflash; OEM etrack before)"
     log "full picture: '$SELF inventory'"
 }
 
